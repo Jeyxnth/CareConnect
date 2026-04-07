@@ -1,8 +1,8 @@
 import { useState, useRef, useEffect } from "react";
 
 // ─── Supabase config (fill in your project URL + anon key) ───────────────────
-const SUPABASE_URL = "https://YOUR_PROJECT.supabase.co";
-const SUPABASE_ANON_KEY = "YOUR_ANON_KEY";
+const SUPABASE_URL = "https://lzpxjqhdvnzjtcpwfpka.supabase.co";
+const SUPABASE_ANON_KEY = "sb_publishable_EDKv9heMKjM9ggot2zsewg_aKGfv8ol";
 const GEMINI_API_KEY = "AIzaSyCtMy4STWC9J1W3CZPo3UKTVRy5_PfMB94";
 
 // ─── Simple readmission risk ML model (logistic regression weights) ───────────
