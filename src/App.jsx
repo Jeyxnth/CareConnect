@@ -3,6 +3,7 @@ import { useState, useRef, useEffect } from "react";
 // ─── Supabase config (fill in your project URL + anon key) ───────────────────
 const SUPABASE_URL = "https://YOUR_PROJECT.supabase.co";
 const SUPABASE_ANON_KEY = "YOUR_ANON_KEY";
+const GEMINI_API_KEY = "AIzaSyCtMy4STWC9J1W3CZPo3UKTVRy5_PfMB94";
 
 // ─── Simple readmission risk ML model (logistic regression weights) ───────────
 // Features: adherenceScore (0-100), age, comorbidities (0-5), daysPostDischarge
@@ -40,20 +41,50 @@ function readFileAsText(file) {
   });
 }
 
-// ─── Call Claude API (claude-sonnet-4-20250514) ───────────────────────────────
-async function callClaude(messages, systemPrompt) {
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: "claude-sonnet-4-20250514",
-      max_tokens: 1000,
-      system: systemPrompt,
-      messages,
-    }),
-  });
-  const data = await res.json();
-  return data.content?.map((b) => b.text || "").join("") || "No response.";
+// ─── Call Gemini API (gemini-1.5-pro) ───────────────────────────────
+async function callGemini(messages, systemPrompt) {
+  try {
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          contents: [
+            {
+              role: "user",
+              parts: [
+                {
+                  text:
+                    systemPrompt +
+                    "\n\n" +
+                    messages.map((m) => m.content).join("\n"),
+                },
+              ],
+            },
+          ],
+        }),
+      }
+    );
+
+    const data = await res.json();
+
+    console.log("Gemini FULL response:", data);
+
+    if (data.error) {
+      return "Error: " + data.error.message;
+    }
+
+    return (
+      data?.candidates?.[0]?.content?.parts?.[0]?.text ||
+      "No response from Gemini."
+    );
+  } catch (err) {
+    console.error(err);
+    return "Gemini request failed.";
+  }
 }
 
 // ─── Supabase helpers ─────────────────────────────────────────────────────────
@@ -197,11 +228,24 @@ discharge summary for personalized guidance, but still try to help with general 
     const text = await readFileAsText(file);
     setDocText(text);
 
-    // Ask Claude to summarise the discharge doc
-    const summary = await callClaude(
-      [{ role: "user", content: `Here is a patient discharge document. Please extract and summarize: patient name (if present), diagnosis, key medications with dosages and schedules, activity restrictions, follow-up appointments, and critical warning signs. Be concise.\n\n${text.slice(0, 4000)}` }],
-      "You are a medical document parser. Return a clean structured summary."
-    );
+    // Ask Gemini to summarise the discharge doc
+   const summary = await callGemini(
+  [
+    {
+      role: "user",
+      content: `Here is a patient discharge document. Extract:
+- patient name
+- diagnosis
+- medications with dosage
+- follow-ups
+- warning signs
+
+Document:
+${text.slice(0, 4000)}`
+    }
+  ],
+  "You are a medical document parser. Be precise and structured."
+);
     setDocSummary(summary);
 
     // Greet patient
@@ -233,7 +277,7 @@ discharge summary for personalized guidance, but still try to help with general 
     setLoading(true);
 
     const history = newMessages.map((m) => ({ role: m.role, content: m.content }));
-    const reply = await callClaude(history, systemPrompt);
+    const reply = await callGemini(history, systemPrompt);
 
     const botMsg = { role: "assistant", content: reply };
     setMessages([...newMessages, botMsg]);
