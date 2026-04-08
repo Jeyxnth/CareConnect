@@ -3,7 +3,7 @@ import { useState, useRef, useEffect } from "react";
 // ─── Supabase config (fill in your project URL + anon key) ───────────────────
 const SUPABASE_URL = "https://lzpxjqhdvnzjtcpwfpka.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_EDKv9heMKjM9ggot2zsewg_aKGfv8ol";
-const GEMINI_API_KEY = "AIzaSyCtMy4STWC9J1W3CZPo3UKTVRy5_PfMB94";
+
 
 // ─── Simple readmission risk ML model (logistic regression weights) ───────────
 // Features: adherenceScore (0-100), age, comorbidities (0-5), daysPostDischarge
@@ -43,49 +43,27 @@ function readFileAsText(file) {
 
 // ─── Call Gemini API (gemini-1.5-pro) ───────────────────────────────
 async function callGemini(messages, systemPrompt) {
-  try {
-    const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          contents: [
-            {
-              role: "user",
-              parts: [
-                {
-                  text:
-                    systemPrompt +
-                    "\n\n" +
-                    messages.map((m) => m.content).join("\n"),
-                },
-              ],
-            },
-          ],
-        }),
-      }
-    );
-
-    const data = await res.json();
-
-    console.log("Gemini FULL response:", data);
-
-    if (data.error) {
-      return "Error: " + data.error.message;
+  const res = await fetch(
+    "https://lzpxjqhdvnzjtcpwfpka.supabase.co/functions/v1/gemini",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        prompt:
+          systemPrompt +
+          "\n\n" +
+          messages.map((m) => m.content).join("\n"),
+      }),
     }
+  );
 
-    return (
-      data?.candidates?.[0]?.content?.parts?.[0]?.text ||
-      "No response from Gemini."
-    );
-  } catch (err) {
-    console.error(err);
-    return "Gemini request failed.";
-  }
+  const data = await res.json();
+  return data.reply;
 }
+
+
 
 // ─── Supabase helpers ─────────────────────────────────────────────────────────
 async function saveToSupabase(table, payload) {
