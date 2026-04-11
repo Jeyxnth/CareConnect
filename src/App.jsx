@@ -1,26 +1,28 @@
 import { useState, useRef, useEffect } from "react";
+import { createClient } from "@supabase/supabase-js";
 
-// ─── Supabase config (fill in your project URL + anon key) ───────────────────
+// ─── Supabase config ───────────────────────────────────────────
 const SUPABASE_URL = "https://lzpxjqhdvnzjtcpwfpka.supabase.co";
-const SUPABASE_ANON_KEY = "sb_publishable_EDKv9heMKjM9ggot2zsewg_aKGfv8ol";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imx6cHhqcWhkdm56anRjcHdmcGthIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU1NzcwODAsImV4cCI6MjA5MTE1MzA4MH0.ZA79EgZpXzbuhGZSC6x8_J5TMIfLOo0rGkmg2VhSzvQ";
+const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
+if (typeof window !== "undefined") {
+  window.supabase = supabase;
+}
 
-// ─── Simple readmission risk ML model (logistic regression weights) ───────────
-// Features: adherenceScore (0-100), age, comorbidities (0-5), daysPostDischarge
+// ─── Readmission risk ML model ───────────────────────────────
 function predictReadmissionRisk({ adherenceScore, age, comorbidities, daysPostDischarge }) {
-  // Normalise inputs
   const a = adherenceScore / 100;
   const ag = (age - 30) / 70;
   const c = comorbidities / 5;
   const d = Math.min(daysPostDischarge, 30) / 30;
 
-  // Logistic regression coefficients (trained on synthetic clinical data)
   const logit =
     -2.1 +
-    -3.5 * a +   // higher adherence → lower risk
-    1.8 * ag +   // older → higher risk
-    1.4 * c +    // more comorbidities → higher risk
-    -0.9 * d;    // further from discharge → slightly lower risk
+    -3.5 * a +
+    1.8 * ag +
+    1.4 * c +
+    -0.9 * d;
 
   const prob = 1 / (1 + Math.exp(-logit));
   return Math.round(prob * 100);
@@ -32,7 +34,6 @@ function getRiskLevel(pct) {
   return { label: "High Risk", color: "#ef4444", bg: "#fee2e2" };
 }
 
-// ─── Parse PDF/text file locally ─────────────────────────────────────────────
 function readFileAsText(file) {
   return new Promise((resolve) => {
     const reader = new FileReader();
@@ -41,46 +42,87 @@ function readFileAsText(file) {
   });
 }
 
-// ─── Call Gemini API (gemini-1.5-pro) ───────────────────────────────
+// ─── Call Gemini API via Edge Function ───────────────────────
 async function callGemini(messages, systemPrompt) {
-  const res = await fetch(
-    "https://lzpxjqhdvnzjtcpwfpka.supabase.co/functions/v1/gemini",
-    {
+  const prompt =
+    systemPrompt +
+    "\n\n" +
+    messages.map((m) => m.content).join("\n");
+
+
+  const {
+    data: { session },
+    error: sessionError,
+  } = await supabase.auth.getSession();
+
+  if (sessionError) {
+    console.error("Auth session error:", sessionError);
+    return "Error: Unable to read authentication session.";
+  }
+
+  if (!session?.access_token) {
+    return "Please sign in to use the AI assistant.";
+  }
+
+  const requestUrl = `${SUPABASE_URL}/functions/v1/gemini`;
+  console.log("Calling Gemini Edge Function at:", requestUrl);
+
+  try {
+    const response = await fetch(requestUrl, {
       method: "POST",
+      mode: "cors",
+      credentials: "omit",
+      cache: "no-store",
       headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        prompt:
-          systemPrompt +
-          "\n\n" +
-          messages.map((m) => m.content).join("\n"),
-      }),
+  "Content-Type": "application/json",
+  "Authorization": `Bearer ${session.access_token}`,
+},
+      body: JSON.stringify({ prompt }),
+    });
+
+    console.log("Response status:", response.status);
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error("Gemini function error:", response.status, errorText);
+      
+      if (response.status === 401) {
+        return "Error: Unauthorized. Please check your Supabase configuration and ensure SUPABASE_ANON_KEY is set in your Edge Function environment.";
+      }
+      
+      try {
+        const errorData = JSON.parse(errorText);
+        return `Error: ${errorData.error || response.statusText}`;
+      } catch {
+        return `Error: ${response.statusText}`;
+      }
     }
-  );
 
-  const data = await res.json();
-  return data.reply;
+    const result = await response.json();
+    console.log("Gemini result:", result);
+
+    return result?.reply || "No response from AI";
+  } catch (err) {
+    console.error("Gemini fetch error:", err);
+    return `Error: ${err.message}`;
+  }
+  console.log("Session:", session);
+console.log("Access Token:", session?.access_token);
 }
 
-
-
-// ─── Supabase helpers ─────────────────────────────────────────────────────────
+// ─── Supabase helpers ─────────────────────────────────────────
 async function saveToSupabase(table, payload) {
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      apikey: SUPABASE_ANON_KEY,
-      Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-      Prefer: "return=representation",
-    },
-    body: JSON.stringify(payload),
-  });
-  return res.json();
+  try {
+    const { error } = await supabase.from(table).insert(payload).select();
+    if (error) {
+      console.error("Supabase error:", error);
+    }
+  } catch (err) {
+    console.error("Insert failed:", err);
+  }
 }
 
-// ─── Components ───────────────────────────────────────────────────────────────
+// ─── Components ───────────────────────────────────────────────
 
 function Pill({ label, color, bg }) {
   return (
@@ -152,9 +194,9 @@ function ChatMessage({ msg }) {
   );
 }
 
-// ─── Main App ─────────────────────────────────────────────────────────────────
+// ─── Main App ─────────────────────────────────────────────────
 export default function App() {
-  const [tab, setTab] = useState("chat"); // chat | risk
+  const [tab, setTab] = useState("chat");
   const [patientDoc, setPatientDoc] = useState(null);
   const [docText, setDocText] = useState("");
   const [docSummary, setDocSummary] = useState("");
@@ -176,13 +218,206 @@ export default function App() {
     { date: "Day 3", score: 75 },
     { date: "Day 4", score: 70 },
     { date: "Day 5", score: 65 },
-    { date: "Today", score: riskForm.adherenceScore },
+    { date: "Today", score: 70 },
   ]);
+  const [user, setUser] = useState(null);
+  const [authMode, setAuthMode] = useState("sign-in");
+  const [authEmail, setAuthEmail] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [authLoading, setAuthLoading] = useState(false);
+  const [authError, setAuthError] = useState("");
   const chatEndRef = useRef(null);
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
+
+  useEffect(() => {
+    async function loadSession() {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      setUser(session?.user ?? null);
+    }
+
+    loadSession();
+
+    const { data: authListener } = supabase.auth.onAuthStateChange(
+      (_event, session) => {
+        setUser(session?.user ?? null);
+      }
+    );
+
+    return () => authListener.subscription?.unsubscribe();
+  }, []);
+
+  async function handleAuthSubmit(e) {
+    e.preventDefault();
+    setAuthError("");
+    setAuthLoading(true);
+
+    if (!authEmail.trim() || !authPassword) {
+      setAuthError("Enter both email and password.");
+      setAuthLoading(false);
+      return;
+    }
+
+    if (authMode === "sign-in") {
+      const { error } = await supabase.auth.signInWithPassword({
+        email: authEmail.trim(),
+        password: authPassword,
+      });
+      if (error) setAuthError(error.message);
+    } else {
+      const { error } = await supabase.auth.signUp({
+        email: authEmail.trim(),
+        password: authPassword,
+      });
+      if (error) setAuthError(error.message);
+      else
+        setAuthError(
+          "Check your email for a confirmation link if required by your Supabase settings."
+        );
+    }
+
+    setAuthLoading(false);
+  }
+
+  async function handleSignOut() {
+    await supabase.auth.signOut();
+    setUser(null);
+  }
+
+  if (!user) {
+    return (
+      <div style={{
+        fontFamily: "'DM Sans', 'Segoe UI', sans-serif",
+        minHeight: "100vh",
+        background: "linear-gradient(135deg, #f0f4ff 0%, #faf5ff 100%)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 24,
+      }}>
+        <div style={{
+          width: "100%",
+          maxWidth: 420,
+          background: "#fff",
+          borderRadius: 24,
+          padding: "32px 28px",
+          boxShadow: "0 20px 60px rgba(15, 23, 42, 0.08)",
+        }}>
+          <div style={{ marginBottom: 24 }}>
+            <div style={{ fontSize: 28, fontWeight: 800, color: "#1e293b" }}>
+              CareConnect
+            </div>
+            <div style={{ marginTop: 8, color: "#475569", fontSize: 14 }}>
+              Sign in or sign up with your email to access personalized recovery support.
+            </div>
+          </div>
+
+          <div style={{ display: "flex", gap: 8, marginBottom: 20 }}>
+            {[
+              ["sign-in", "Sign in"],
+              ["sign-up", "Sign up"],
+            ].map(([mode, label]) => (
+              <button
+                key={mode}
+                type="button"
+                onClick={() => {
+                  setAuthMode(mode);
+                  setAuthError("");
+                }}
+                style={{
+                  flex: 1,
+                  padding: "10px 0",
+                  borderRadius: 12,
+                  border: authMode === mode ? "none" : "1px solid #e2e8f0",
+                  background: authMode === mode ? "#6366f1" : "#f8fafc",
+                  color: authMode === mode ? "#fff" : "#475569",
+                  fontWeight: 700,
+                  cursor: "pointer",
+                }}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
+          <form onSubmit={handleAuthSubmit}>
+            <label style={{ display: "block", marginBottom: 12, color: "#475569", fontSize: 12, fontWeight: 700 }}>
+              Email address
+              <input
+                value={authEmail}
+                onChange={(e) => setAuthEmail(e.target.value)}
+                type="email"
+                placeholder="you@example.com"
+                style={{
+                  width: "100%",
+                  marginTop: 8,
+                  padding: "12px 14px",
+                  borderRadius: 12,
+                  border: "1px solid #e2e8f0",
+                  outline: "none",
+                  fontSize: 14,
+                }}
+              />
+            </label>
+            <label style={{ display: "block", marginBottom: 20, color: "#475569", fontSize: 12, fontWeight: 700 }}>
+              Password
+              <input
+                value={authPassword}
+                onChange={(e) => setAuthPassword(e.target.value)}
+                type="password"
+                placeholder="Create a secure password"
+                style={{
+                  width: "100%",
+                  marginTop: 8,
+                  padding: "12px 14px",
+                  borderRadius: 12,
+                  border: "1px solid #e2e8f0",
+                  outline: "none",
+                  fontSize: 14,
+                }}
+              />
+            </label>
+
+            {authError && (
+              <div style={{ color: "#dc2626", marginBottom: 14, fontSize: 13 }}>
+                {authError}
+              </div>
+            )}
+
+            <button
+              type="submit"
+              disabled={authLoading}
+              style={{
+                width: "100%",
+                padding: "14px 0",
+                borderRadius: 14,
+                border: "none",
+                background: "linear-gradient(135deg,#6366f1,#8b5cf6)",
+                color: "#fff",
+                fontWeight: 800,
+                fontSize: 14,
+                cursor: authLoading ? "not-allowed" : "pointer",
+              }}
+            >
+              {authLoading
+                ? "Working..."
+                : authMode === "sign-in"
+                ? "Sign in"
+                : "Create account"}
+            </button>
+          </form>
+
+          <div style={{ marginTop: 18, color: "#64748b", fontSize: 12, lineHeight: 1.6 }}>
+            Your account is managed securely through Supabase Auth.
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   const systemPrompt = docText
     ? `You are a compassionate and knowledgeable post-discharge medical care assistant. 
@@ -206,12 +441,11 @@ discharge summary for personalized guidance, but still try to help with general 
     const text = await readFileAsText(file);
     setDocText(text);
 
-    // Ask Gemini to summarise the discharge doc
-   const summary = await callGemini(
-  [
-    {
-      role: "user",
-      content: `Here is a patient discharge document. Extract:
+    const summary = await callGemini(
+      [
+        {
+          role: "user",
+          content: `Here is a patient discharge document. Extract:
 - patient name
 - diagnosis
 - medications with dosage
@@ -220,19 +454,17 @@ discharge summary for personalized guidance, but still try to help with general 
 
 Document:
 ${text.slice(0, 4000)}`
-    }
-  ],
-  "You are a medical document parser. Be precise and structured."
-);
+        }
+      ],
+      "You are a medical document parser. Be precise and structured."
+    );
     setDocSummary(summary);
 
-    // Greet patient
     setMessages([{
       role: "assistant",
       content: `👋 Hello${patientName ? `, ${patientName}` : ""}! I've reviewed your discharge documents. Here's a quick summary:\n\n${summary}\n\nFeel free to ask me anything about your recovery, medications, diet, or activities!`,
     }]);
 
-    // Save to Supabase (optional – fails gracefully if not configured)
     try {
       await saveToSupabase("patient_documents", {
         patient_name: patientName || "Unknown",
@@ -255,18 +487,19 @@ ${text.slice(0, 4000)}`
     setLoading(true);
 
     const history = newMessages.map((m) => ({ role: m.role, content: m.content }));
-    const reply = await callGemini(history, systemPrompt);
+    let reply = await callGemini(history, systemPrompt);
+    if (!reply) {
+      reply = "I couldn't get a response right now. Please try again.";
+    }
 
     const botMsg = { role: "assistant", content: reply };
     setMessages([...newMessages, botMsg]);
 
-    // Save conversation turn to Supabase
     try {
       await saveToSupabase("chat_logs", {
         patient_name: patientName || "Unknown",
         user_message: input,
         ai_response: reply,
-        created_at: new Date().toISOString(),
       });
     } catch (_) {}
 
@@ -276,20 +509,17 @@ ${text.slice(0, 4000)}`
   function calculateRisk() {
     const pct = predictReadmissionRisk(riskForm);
     setRiskResult(pct);
-    // Update adherence log with current score
     setAdherenceLog((prev) => {
       const updated = [...prev];
       updated[updated.length - 1] = { date: "Today", score: riskForm.adherenceScore };
       return updated;
     });
-    // Save risk assessment
     try {
       saveToSupabase("risk_assessments", {
         patient_name: patientName || "Unknown",
         ...riskForm,
         risk_percentage: pct,
         risk_level: getRiskLevel(pct).label,
-        created_at: new Date().toISOString(),
       });
     } catch (_) {}
   }
@@ -323,7 +553,6 @@ ${text.slice(0, 4000)}`
               <div style={{ fontSize: 12, opacity: .85 }}>Post-Discharge AI Care Assistant</div>
             </div>
           </div>
-          {/* Patient name input */}
           <input
             value={patientName}
             onChange={(e) => setPatientName(e.target.value)}
@@ -333,9 +562,24 @@ ${text.slice(0, 4000)}`
               padding: "9px 14px", borderRadius: 10, border: "none",
               background: "rgba(255,255,255,.2)", color: "#fff",
               fontSize: 13, outline: "none",
-              "::placeholder": { color: "rgba(255,255,255,.7)" },
             }}
           />
+          <button
+            onClick={handleSignOut}
+            style={{
+              marginTop: 10,
+              width: "100%",
+              borderRadius: 10,
+              border: "none",
+              padding: "10px 14px",
+              background: "rgba(255,255,255,.18)",
+              color: "#fff",
+              fontWeight: 700,
+              cursor: "pointer",
+            }}
+          >
+            Sign out
+          </button>
         </div>
       </div>
 
@@ -411,7 +655,6 @@ ${text.slice(0, 4000)}`
                   <div style={{ fontSize: 48 }}>🩺</div>
                   <div style={{ fontWeight: 600, marginTop: 8 }}>Upload your discharge summary</div>
                   <div style={{ fontSize: 12, marginTop: 4 }}>to get personalized post-care guidance</div>
-                  {/* Quick prompts */}
                   <div style={{ marginTop: 20, display: "flex", flexWrap: "wrap", gap: 8, justifyContent: "center" }}>
                     {["When should I take my medication?", "What foods should I avoid?", "When can I resume exercise?"].map((q) => (
                       <button
@@ -483,7 +726,6 @@ ${text.slice(0, 4000)}`
         {/* ── Risk Tab ── */}
         {tab === "risk" && (
           <div style={{ marginTop: 12 }}>
-            {/* Risk form */}
             <div style={{
               background: "#fff", borderRadius: 16, padding: 16,
               boxShadow: "0 2px 12px rgba(0,0,0,.06)",
@@ -525,7 +767,6 @@ ${text.slice(0, 4000)}`
               >Calculate Readmission Risk</button>
             </div>
 
-            {/* Risk result */}
             {riskResult !== null && (
               <div style={{
                 background: "#fff", borderRadius: 16, padding: 16, marginTop: 12,
@@ -550,7 +791,6 @@ ${text.slice(0, 4000)}`
               </div>
             )}
 
-            {/* Adherence trend */}
             <div style={{
               background: "#fff", borderRadius: 16, padding: 16, marginTop: 12,
               boxShadow: "0 2px 12px rgba(0,0,0,.06)",
@@ -561,7 +801,6 @@ ${text.slice(0, 4000)}`
               <div style={{ display: "flex", alignItems: "flex-end", gap: 6, height: 80 }}>
                 {adherenceLog.map((d, i) => {
                   const h = (d.score / maxScore) * 70;
-                  const { color } = getRiskLevel(100 - d.score);
                   return (
                     <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
                       <div style={{ fontSize: 9, color: "#94a3b8", fontWeight: 600 }}>{d.score}%</div>
