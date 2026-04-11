@@ -34,12 +34,90 @@ function getRiskLevel(pct) {
   return { label: "High Risk", color: "#ef4444", bg: "#fee2e2" };
 }
 
-function readFileAsText(file) {
-  return new Promise((resolve) => {
-    const reader = new FileReader();
-    reader.onload = (e) => resolve(e.target.result);
-    reader.readAsText(file);
-  });
+import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf";
+import "pdfjs-dist/legacy/build/pdf.worker";
+
+// 📄 Extract text from normal PDF
+async function extractPDFText(file) {
+  const arrayBuffer = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+
+  let text = "";
+
+  for (let i = 1; i <= pdf.numPages; i++) {
+    const page = await pdf.getPage(i);
+    const content = await page.getTextContent();
+    text += content.items.map(item => item.str).join(" ") + "\n";
+  }
+
+  return text;
+}
+
+// 🧠 OCR (for scanned PDFs & images)
+async function extractTextWithOCR(file) {
+  const arrayBuffer = await file.arrayBuffer();
+
+  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+
+  let fullText = "";
+
+  for (let i = 1; i <= pdf.numPages; i++) {
+    const page = await pdf.getPage(i);
+
+    const viewport = page.getViewport({ scale: 2 });
+
+    const canvas = document.createElement("canvas");
+    const context = canvas.getContext("2d");
+
+    canvas.width = viewport.width;
+    canvas.height = viewport.height;
+
+    await page.render({
+      canvasContext: context,
+      viewport,
+    }).promise;
+
+    const imageData = canvas.toDataURL("image/png");
+
+    const { data } = await Tesseract.recognize(imageData, "eng");
+
+    fullText += data.text + "\n";
+  }
+
+  return fullText;
+}
+
+// 🔥 SMART EXTRACTOR (MAIN FUNCTION)
+async function extractDocumentText(file) {
+  console.log("Processing file:", file.type);
+
+  // 🖼️ If image → direct OCR
+  if (file.type.startsWith("image/")) {
+    console.log("Image detected → OCR");
+    return await extractTextWithOCR(file);
+  }
+
+  // 📄 If PDF → try normal extraction first
+  if (file.type === "application/pdf") {
+    try {
+      const text = await extractPDFText(file);
+
+      if (text && text.trim().length > 100) {
+        console.log("PDF text extraction success");
+        return text;
+      }
+
+      console.log("PDF seems scanned → switching to OCR");
+      return await extractTextWithOCR(file);
+
+    } catch (err) {
+      console.log("PDF parse failed → OCR fallback");
+      return await extractTextWithOCR(file);
+    }
+  }
+
+  // 📄 Fallback (txt etc.)
+  return await file.text();
 }
 
 // ─── Call Gemini API via Edge Function ───────────────────────
@@ -438,25 +516,34 @@ discharge summary for personalized guidance, but still try to help with general 
     if (!file) return;
     setDocLoading(true);
     setPatientDoc(file.name);
-    const text = await readFileAsText(file);
+    const text = await extractDocumentText(file);
     setDocText(text);
 
     const summary = await callGemini(
-      [
-        {
-          role: "user",
-          content: `Here is a patient discharge document. Extract:
-- patient name
-- diagnosis
-- medications with dosage
-- follow-ups
-- warning signs
+      [{
+        role: "user",
+        content: `
+    Extract structured medical data from this discharge document.
 
-Document:
-${text.slice(0, 4000)}`
-        }
+    Return ONLY valid JSON:
+
+    {
+      "patient_name": "",
+      "diagnosis": [],
+      "medications": [
+        { "name": "", "dosage": "", "frequency": "" }
       ],
-      "You are a medical document parser. Be precise and structured."
+      "follow_ups": [],
+      "warning_signs": [],
+      "diet": [],
+      "activity_restrictions": []
+    }
+
+    Document:
+    ${text.slice(0, 6000)}
+    `
+      }],
+      "You are a medical document parser. Strict JSON only."
     );
     setDocSummary(summary);
 
@@ -614,7 +701,12 @@ ${text.slice(0, 4000)}`
             fontSize: 12, fontWeight: 700, cursor: "pointer", flexShrink: 0,
           }}>
             {docLoading ? "…" : patientDoc ? "Re-upload" : "Choose File"}
-            <input type="file" accept=".txt,.pdf,.doc,.docx" onChange={handleUpload} style={{ display: "none" }} />
+            <input 
+               type="file" 
+                accept=".txt,.pdf,image/*" 
+                onChange={handleUpload} 
+                style={{ display: "none" }} 
+              />
           </label>
         </div>
 
