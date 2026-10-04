@@ -1,0 +1,123 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --color-bg: #FAFAF8;
+  --color-surface: #FFFFFF;
+  --color-surface-alt: #F4F1EE;
+  --color-primary: #4A9B8E;
+  --color-primary-dark: #357A6F;
+  --color-primary-light: #EAF5F3;
+  --color-heading: #1A2332;
+  --color-body: #4A5568;
+  --color-muted: #9CA3AF;
+  --color-alert: #E8736A;
+  --color-warning: #F5A623;
+  --color-success: #4A9B8E;
+  --color-border: #E8E4DF;
+  --color-shadow: rgba(26, 35, 50, 0.06);
+  --color-emergency-bg: #FFF5F5;
+  --color-emergency-border: rgba(232, 115, 106, 0.2);
+  --font-body: 'Inter', system-ui, sans-serif;
+  --font-heading: 'Fraunces', Georgia, serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-bg: #0F1117;
+    --color-surface: #1A1D27;
+    --color-surface-alt: #222536;
+    --color-heading: #F1F0EE;
+    --color-body: #9CA3AF;
+    --color-border: #2E3144;
+    --color-emergency-bg: #2A1515;
+  }
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-body);
+  font-family: var(--font-body);
+  margin: 0;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1, h2, h3 {
+  font-family: var(--font-heading);
+  font-style: italic;
+  color: var(--color-heading);
+  margin: 0;
+}
+
+input, textarea, select, button {
+  font-family: inherit;
+}
+
+.cc-input::placeholder {
+  color: var(--color-muted);
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: none; }
+}
+
+@keyframes bounce {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(-5px); }
+}
+
+@keyframes shimmer {
+  from { background-position: -200% 0; }
+  to   { background-position:  200% 0; }
+}
+
+@keyframes slideDown {
+  from { transform: translateY(-100%); opacity: 0; }
+  to   { transform: translateY(0);     opacity: 1; }
+}
+
+/* Used by Toast, Button spinner and the app loader */
+@keyframes slideIn {
+  from { transform: translateX(100%); opacity: 0; }
+  to   { transform: translateX(0);    opacity: 1; }
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes slideInRight {
+  from { opacity: 0; transform: translateX(12px); }
+  to   { opacity: 1; transform: none; }
+}
+
+@keyframes slideInLeft {
+  from { opacity: 0; transform: translateX(-12px); }
+  to   { opacity: 1; transform: none; }
+}
+
+@keyframes slideUp {
+  from { transform: translateY(100%); }
+  to   { transform: none; }
+}
+
+@keyframes pulseRing {
+  0%   { transform: scale(1);   opacity: 0.6; }
+  100% { transform: scale(1.7); opacity: 0; }
+}
+
+@keyframes ringPulse {
+  0%   { transform: scale(1);   opacity: 0.6; }
+  100% { transform: scale(1.7); opacity: 0; }
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.35; }
+}
